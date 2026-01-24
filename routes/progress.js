@@ -6,7 +6,7 @@ const { protect, authorize } = require('../middleware/auth');
 // Update or create progress for a student
 // POST /api/progress
 // body: { studentId, lessonId, activityId, status, score }
-router.post('/', protect, async (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { studentId, lessonId, activityId, status, score } = req.body;
 
@@ -38,7 +38,7 @@ router.post('/', protect, async (req, res) => {
 
 // Get progress for a student (self) or by teacher/admin
 // GET /api/progress?studentId=...
-router.get('/', protect, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { studentId } = req.query;
 

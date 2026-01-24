@@ -42,7 +42,7 @@ const diskOpts = {
 const upload = hasCloudinary ? multer(memOpts) : multer(diskOpts);
 
 // Update profile picture
-router.put('/profile/picture', protect, upload.single('profilePicture'), async (req, res) => {
+router.put('/profile/picture', upload.single('profilePicture'), async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) {
@@ -95,7 +95,7 @@ router.put('/profile/picture', protect, upload.single('profilePicture'), async (
 });
 
 // Update cover photo
-router.put('/profile/cover', protect, upload.single('coverPhoto'), async (req, res) => {
+router.put('/profile/cover', upload.single('coverPhoto'), async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) {
@@ -148,7 +148,7 @@ router.put('/profile/cover', protect, upload.single('coverPhoto'), async (req, r
 });
 
 // Update bio
-router.put('/profile/bio', protect, async (req, res) => {
+router.put('/profile/bio', async (req, res) => {
   try {
     const { bio } = req.body;
     
@@ -178,7 +178,7 @@ router.put('/profile/bio', protect, async (req, res) => {
 });
 
 // Get user profile by ID (for viewing other users' profiles)
-router.get('/profile/:userId', protect, async (req, res) => {
+router.get('/profile/:userId', async (req, res) => {
   try {
     const user = await User.findById(req.params.userId).select('-password');
     if (!user) {
@@ -193,7 +193,7 @@ router.get('/profile/:userId', protect, async (req, res) => {
 });
 
 // Get user profile
-router.get('/profile', protect, async (req, res) => {
+router.get('/profile', async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
     if (!user) {

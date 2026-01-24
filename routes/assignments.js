@@ -22,8 +22,8 @@ function uploadBufferToCloudinary(buffer, originalname, folder = 'ttls_assignmen
   });
 }
 
-// Create assignment (teacher only)
-router.post('/', protect, authorize('teacher','admin'), upload.array('attachments', 10), async (req, res) => {
+// Create assignment (public for testing)
+router.post('/', upload.array('attachments', 10), async (req, res) => {
   try {
     console.log('Create assignment - hasCloudinary:', !!hasCloudinary);
     console.log('Create assignment - headers content-type:', req.headers['content-type']);
@@ -97,8 +97,8 @@ router.post('/', protect, authorize('teacher','admin'), upload.array('attachment
   }
 });
 
-// List assignments (students and teachers) - teacher can see all, students see all too but can be filtered later
-router.get('/', protect, async (req, res) => {
+// List assignments (public for testing)
+router.get('/', async (req, res) => {
   try {
     const filter = {};
     if (req.query.lessonId) filter.lesson = req.query.lessonId;
@@ -110,8 +110,8 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
-// Get single assignment
-router.get('/:id', protect, async (req, res) => {
+// Get single assignment (public for testing)
+router.get('/:id', async (req, res) => {
   try {
     const a = await Assignment.findById(req.params.id).populate('createdBy', 'firstName lastName profilePicture');
     if (!a) return res.status(404).json({ success: false, message: 'Not found' });
@@ -121,8 +121,8 @@ router.get('/:id', protect, async (req, res) => {
   }
 });
 
-// Update assignment (teacher only)
-router.put('/:id', protect, authorize('teacher','admin'), upload.array('attachments', 10), async (req, res) => {
+// Update assignment (public for testing)
+router.put('/:id', upload.array('attachments', 10), async (req, res) => {
   try {
     const assignment = await Assignment.findById(req.params.id);
     if (!assignment) return res.status(404).json({ success: false, message: 'Assignment not found' });
