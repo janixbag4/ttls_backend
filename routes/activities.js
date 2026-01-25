@@ -164,6 +164,36 @@ router.put('/:activityId/submissions/:submissionId/grade', protect, authorize('t
   }
 });
 
+// Delete a submission (teacher/admin)
+router.delete('/:activityId/submissions/:submissionId', protect, authorize('teacher', 'admin'), async (req, res) => {
+  try {
+    const activity = await Activity.findById(req.params.activityId);
+    if (!activity) return res.status(404).json({ success: false, message: 'Activity not found' });
+
+    const sub = activity.submissions.id(req.params.submissionId);
+    if (!sub) return res.status(404).json({ success: false, message: 'Submission not found' });
+
+    // Delete files from Cloudinary if they exist
+    if (sub.files && sub.files.length) {
+      for (const f of sub.files) {
+        try {
+          if (f.public_id) await cloudinary.uploader.destroy(f.public_id);
+        } catch (e) {
+          console.warn('Failed deleting file', e.message || e);
+        }
+      }
+    }
+
+    activity.submissions.id(req.params.submissionId).deleteOne();
+    await activity.save();
+
+    res.json({ success: true, message: 'Submission deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Failed to delete submission' });
+  }
+});
+
 // Delete activity (admin or owner)
 router.delete('/:id', protect, async (req, res) => {
   try {
