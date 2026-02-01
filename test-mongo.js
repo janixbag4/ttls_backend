@@ -1,5 +1,6 @@
 const { MongoClient } = require('mongodb');
-const uri = 'mongodb+srv://ttls_admin:ttls1234567890@cluster0.8i1sn.mongodb.net/abisDB?retryWrites=true&w=majority';
+// Use environment variable for MongoDB connection to avoid committing credentials
+const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/abisDB?retryWrites=true&w=majority';
 const client = new MongoClient(uri);
 
 async function run() {
