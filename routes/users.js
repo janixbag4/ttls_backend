@@ -41,6 +41,24 @@ const diskOpts = {
 };
 const upload = hasCloudinary ? multer(memOpts) : multer(diskOpts);
 
+// Get all users (for messaging/directory)
+router.get('/', protect, async (req, res) => {
+  try {
+    const users = await User.find({ _id: { $ne: req.user.id } }) // Exclude current user
+      .select('_id firstName lastName email idNumber role profilePicture status')
+      .sort({ firstName: 1, lastName: 1 });
+
+    res.json({
+      success: true,
+      count: users.length,
+      data: users
+    });
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch users' });
+  }
+});
+
 // Update profile picture
 router.put('/profile/picture', protect, upload.single('profilePicture'), async (req, res) => {
   try {
