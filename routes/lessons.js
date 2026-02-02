@@ -829,9 +829,26 @@ router.get('/:lessonId/files/:fileId/download', protect, async (req, res) => {
       }
     }
 
-    // For remote URLs (Cloudinary), just redirect - browser will download
+    // For remote URLs (Cloudinary), stream the file and set headers so filename and extension are preserved
     if (downloadUrl && /^https?:\/\//i.test(downloadUrl)) {
-      res.redirect(302, downloadUrl);
+      try {
+        const responseStream = await axios.get(downloadUrl, { responseType: 'stream' });
+        const headers = responseStream.headers || responseStream.data?.headers || {};
+        const sourceContentType = headers['content-type'] || headers['Content-Type'];
+        const sourceDisposition = headers['content-disposition'] || headers['Content-Disposition'];
+        let mime = file.fileType || sourceContentType || 'application/octet-stream';
+        let filename = file.filename || 'file';
+        const extracted = extractFilenameFromContentDisposition(sourceDisposition);
+        if (extracted) filename = extracted;
+        filename = chooseDownloadFilename(filename, lesson.title || 'file', mime);
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        responseStream.data.pipe(res);
+      } catch (err) {
+        console.warn('Failed to stream remote file, falling back to redirect:', err && err.message ? err.message : err);
+        // Fallback to redirect (previous behavior) if streaming fails
+        res.redirect(302, downloadUrl);
+      }
     } else {
       // For local files, serve them directly
       const localPath = path.isAbsolute(downloadUrl) ? downloadUrl : path.join(__dirname, '..', downloadUrl);

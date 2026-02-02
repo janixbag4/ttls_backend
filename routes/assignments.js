@@ -23,7 +23,8 @@ function uploadBufferToCloudinary(buffer, originalname, folder = 'ttls_assignmen
 }
 
 // Create assignment (public for testing)
-router.post('/', upload.array('attachments', 10), async (req, res) => {
+  router.post('/', protect, upload.array('attachments', 10), async (req, res) => {
+
   try {
     console.log('Create assignment - hasCloudinary:', !!hasCloudinary);
     console.log('Create assignment - headers content-type:', req.headers['content-type']);
@@ -521,6 +522,45 @@ router.get('/:id/statistics', protect, authorize('teacher','admin'), async (req,
   } catch (err) {
     console.error('Get statistics error', err);
     res.status(500).json({ success: false, message: 'Failed to get statistics' });
+  }
+});
+
+// Delete assignment (teacher/admin only - must be creator or admin)
+router.delete('/:id', protect, async (req, res) => {
+  try {
+    const assignment = await Assignment.findById(req.params.id);
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: 'Assignment not found' });
+    }
+
+    // Check authorization: only creator or admin can delete
+    if (assignment.createdBy.toString() !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this assignment' });
+    }
+
+    // Delete attachments from Cloudinary if they exist
+    if (assignment.attachments && assignment.attachments.length) {
+      for (const att of assignment.attachments) {
+        try {
+          if (att.public_id && hasCloudinary) {
+            await cloudinary.uploader.destroy(att.public_id);
+          }
+        } catch (err) {
+          console.warn('Failed to delete attachment from Cloudinary:', err.message);
+        }
+      }
+    }
+
+    // Delete all submissions for this assignment
+    await Submission.deleteMany({ assignment: req.params.id });
+
+    // Delete the assignment
+    await Assignment.findByIdAndDelete(req.params.id);
+
+    res.json({ success: true, message: 'Assignment deleted successfully' });
+  } catch (err) {
+    console.error('Delete assignment error:', err);
+    res.status(500).json({ success: false, message: 'Failed to delete assignment' });
   }
 });
 
