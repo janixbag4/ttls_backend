@@ -42,7 +42,7 @@ const diskOpts = {
 const upload = hasCloudinary ? multer(memOpts) : multer(diskOpts);
 
 // Update profile picture
-router.put('/profile/picture', upload.single('profilePicture'), async (req, res) => {
+router.put('/profile/picture', protect, upload.single('profilePicture'), async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) {
@@ -95,7 +95,7 @@ router.put('/profile/picture', upload.single('profilePicture'), async (req, res)
 });
 
 // Update cover photo
-router.put('/profile/cover', upload.single('coverPhoto'), async (req, res) => {
+router.put('/profile/cover', protect, upload.single('coverPhoto'), async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) {
@@ -148,7 +148,7 @@ router.put('/profile/cover', upload.single('coverPhoto'), async (req, res) => {
 });
 
 // Update bio
-router.put('/profile/bio', async (req, res) => {
+router.put('/profile/bio', protect, async (req, res) => {
   try {
     const { bio } = req.body;
     
