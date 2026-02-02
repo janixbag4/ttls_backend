@@ -25,6 +25,7 @@ const protect = async (req, res, next) => {
 
     next();
   } catch (error) {
+    console.warn('auth.protect: JWT verify failed or other error:', error && error.message, 'token present:', !!token);
     return res.status(401).json({ success: false, message: 'Not authorized to access this route' });
   }
 };
