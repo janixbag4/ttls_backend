@@ -44,6 +44,11 @@ const upload = hasCloudinary ? multer(memOpts) : multer(diskOpts);
 // Update profile picture
 router.put('/profile/picture', protect, upload.single('profilePicture'), async (req, res) => {
   try {
+    if (!req.user || !req.user.id) {
+      console.warn('Unauthorized profile/picture request: missing req.user');
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
@@ -97,6 +102,11 @@ router.put('/profile/picture', protect, upload.single('profilePicture'), async (
 // Update cover photo
 router.put('/profile/cover', protect, upload.single('coverPhoto'), async (req, res) => {
   try {
+    if (!req.user || !req.user.id) {
+      console.warn('Unauthorized profile/cover request: missing req.user');
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
@@ -150,6 +160,11 @@ router.put('/profile/cover', protect, upload.single('coverPhoto'), async (req, r
 // Update bio
 router.put('/profile/bio', protect, async (req, res) => {
   try {
+    if (!req.user || !req.user.id) {
+      console.warn('Unauthorized profile/bio request: missing req.user');
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
     const { bio } = req.body;
     
     // Validate bio length
