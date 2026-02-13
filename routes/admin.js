@@ -289,6 +289,24 @@ router.post('/users/bulk-delete', protect, authorize('admin'), async (req, res) 
   }
 });
 
+// @route   DELETE /api/admin/users/:id
+// @desc    Delete a single user
+// @access  Private/Admin
+router.delete('/users/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    res.json({ success: true, message: 'User deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Failed to delete user' });
+  }
+});
+
 // Send email to users (admin)
 // POST /api/admin/users/email
 // body: { userIds: [], subject, text, html }
