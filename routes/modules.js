@@ -61,6 +61,17 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+// Get module count (public endpoint for home page stats)
+router.get('/count', async (req, res) => {
+  try {
+    const count = await Module.countDocuments();
+    res.json({ success: true, data: { count } });
+  } catch (error) {
+    console.error('Error fetching module count:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch module count' });
+  }
+});
+
 // Get single module with lessons
 router.get('/:id', protect, async (req, res) => {
   try {
@@ -268,4 +279,3 @@ router.delete('/:id', protect, authorize('teacher', 'admin'), async (req, res) =
 });
 
 module.exports = router;
-

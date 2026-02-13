@@ -39,6 +39,8 @@ app.use('/api/reports', require('./routes/reports'));
 app.use('/api/comments', require('./routes/comments'));
 // Messaging routes for private chats
 app.use('/api/messages', require('./routes/messages'));
+// Settings routes
+app.use('/api/settings', require('./routes/settings'));
 // Proxy route for external file URLs
 app.use('/api', require('./routes/proxy'));
 

@@ -240,4 +240,15 @@ router.get('/profile', protect, async (req, res) => {
   }
 });
 
+// Get user count (public endpoint for home page stats)
+router.get('/count', async (req, res) => {
+  try {
+    const count = await User.countDocuments({ role: 'student', status: 'approved' });
+    res.json({ success: true, data: { count } });
+  } catch (error) {
+    console.error('Error fetching user count:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch user count' });
+  }
+});
+
 module.exports = router;

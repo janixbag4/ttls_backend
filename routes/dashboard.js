@@ -5,6 +5,7 @@ const Progress = require('../models/Progress');
 const Submission = require('../models/Submission');
 const Assignment = require('../models/Assignment');
 const Lesson = require('../models/Lesson');
+const LessonView = require('../models/LessonView');
 
 // Get dashboard stats for teachers
 router.get('/stats', protect, authorize('teacher', 'admin'), async (req, res) => {
@@ -161,9 +162,15 @@ router.get('/stats/student', protect, authorize('student'), async (req, res) => 
     const allLessons = await Lesson.find({});
     const lessonIds = allLessons.map(l => l._id);
 
-    // Get student's progress on lessons
+    // Get student's completed lessons from LessonView
+    const completedLessonViews = await LessonView.find({ 
+      student: studentId, 
+      completed: true 
+    });
+    const completedLessons = completedLessonViews.length;
+    
+    // Get student's progress on lessons (for backward compatibility)
     const studentProgress = await Progress.find({ student: studentId, lesson: { $in: lessonIds } });
-    const completedLessons = studentProgress.filter(p => p.status === 'completed').length;
     const inProgressLessons = studentProgress.filter(p => p.status === 'in-progress').length;
     const totalLessons = allLessons.length;
 
@@ -176,7 +183,7 @@ router.get('/stats/student', protect, authorize('student'), async (req, res) => 
     const totalSubmissions = studentSubmissions.length;
     const gradedSubmissions = studentSubmissions.filter(s => s.isGraded && s.grade !== null && s.grade !== undefined);
     
-    // Calculate average grade
+    // Calculate average grade (DEPRECATED - will be removed from frontend)
     let averageGrade = 0;
     if (gradedSubmissions.length > 0) {
       const totalScore = gradedSubmissions.reduce((sum, s) => {
@@ -187,7 +194,7 @@ router.get('/stats/student', protect, authorize('student'), async (req, res) => 
       averageGrade = totalScore / gradedSubmissions.length;
     }
 
-    // Get upcoming assignments (not submitted)
+    // Get upcoming assignments (not yet submitted)
     const upcomingAssignments = allAssignments.filter(a => {
       const hasSubmission = studentSubmissions.some(s => {
         const assignmentId = s.assignment?._id || s.assignment;

@@ -332,6 +332,17 @@ router.get('/', protect, async (req, res) => {
   }
 });
 
+// Get lesson count (public endpoint for home page stats)
+router.get('/count', async (req, res) => {
+  try {
+    const count = await Lesson.countDocuments();
+    res.json({ success: true, data: { count } });
+  } catch (error) {
+    console.error('Error fetching lesson count:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch lesson count' });
+  }
+});
+
 // Get single lesson
 router.get('/:id', protect, async (req, res) => {
   try {
@@ -676,6 +687,38 @@ router.post('/:id/view', protect, async (req, res) => {
   } catch (err) {
     console.error('Track lesson view error:', err);
     res.status(500).json({ success: false, message: 'Failed to track lesson view' });
+  }
+});
+
+// Mark lesson as complete (student only)
+router.post('/:id/complete', protect, async (req, res) => {
+  try {
+    const lesson = await Lesson.findById(req.params.id);
+    if (!lesson) return res.status(404).json({ success: false, message: 'Lesson not found' });
+    
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, message: 'Only students can mark lessons complete' });
+    }
+    
+    // Find or create LessonView for this student-lesson pair
+    let lessonView = await LessonView.findOne({ lesson: req.params.id, student: req.user.id });
+    if (!lessonView) {
+      lessonView = new LessonView({
+        lesson: req.params.id,
+        student: req.user.id,
+        openedAt: new Date(),
+      });
+    }
+    
+    // Mark as complete
+    lessonView.completed = true;
+    lessonView.completedAt = new Date();
+    await lessonView.save();
+    
+    res.json({ success: true, message: 'Lesson marked as complete', data: lessonView });
+  } catch (err) {
+    console.error('Mark lesson complete error:', err);
+    res.status(500).json({ success: false, message: 'Failed to mark lesson as complete' });
   }
 });
 
