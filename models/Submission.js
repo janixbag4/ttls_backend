@@ -31,7 +31,8 @@ const SubmissionSchema = new mongoose.Schema({
     }
   ],
   grade: { type: Number }, // Total grade/score
-  totalPoints: { type: Number }, // Total points possible
+  totalScore: { type: Number }, // Total score possible
+  gradePercentage: { type: Number }, // Grade as a percentage (0-100)
   feedback: { type: String }, // General feedback
   isGraded: { type: Boolean, default: false },
   autoGraded: { type: Boolean, default: false }, // Whether automatic grading was applied

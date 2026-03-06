@@ -188,7 +188,7 @@ router.get('/stats/student', protect, authorize('student'), async (req, res) => 
     if (gradedSubmissions.length > 0) {
       const totalScore = gradedSubmissions.reduce((sum, s) => {
         const score = s.grade || 0;
-        const maxPoints = s.totalPoints || 100;
+        const maxPoints = s.totalScore || 100;
         return sum + (score / maxPoints * 100);
       }, 0);
       averageGrade = totalScore / gradedSubmissions.length;

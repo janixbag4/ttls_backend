@@ -31,11 +31,11 @@ function uploadBufferToCloudinary(buffer, originalname, folder = 'ttls_assignmen
     console.log('Create assignment - req.body (post-multer):', req.body);
     console.log('Create assignment - req.files:', Array.isArray(req.files) ? req.files.map(f => ({ originalname: f.originalname, mimetype: f.mimetype, size: f.size, hasBuffer: !!f.buffer })) : req.files);
 
-    const { title, description, instructions, type, dueDate, lessonId, questions, allowAutomaticGrading, allowResubmission } = req.body;
+    const { title, description, instructions, type, dueDate, lessonId, questions, allowAutomaticGrading, allowResubmission, totalPoints: bodyTotalPoints } = req.body;
     
     // Parse questions if provided (for quizzes)
     let parsedQuestions = [];
-    let totalPoints = 0;
+    let totalPoints = bodyTotalPoints ? parseFloat(bodyTotalPoints) : 0;
     if (type === 'quiz' && questions) {
       try {
         parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
@@ -65,7 +65,7 @@ function uploadBufferToCloudinary(buffer, originalname, folder = 'ttls_assignmen
       lesson: lessonId || undefined,
       createdBy: req.user.id,
       questions: parsedQuestions,
-      totalPoints: totalPoints,
+      totalPoints: totalPoints || 100,
       allowAutomaticGrading: allowAutomaticGrading !== undefined ? allowAutomaticGrading : (type === 'quiz'),
       allowResubmission: allowResubmission !== undefined ? allowResubmission : false,
     });
@@ -366,7 +366,7 @@ router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) 
       existingSubmission.resubmittedAt = new Date();
       if (autoGraded) {
         existingSubmission.grade = grade;
-        existingSubmission.totalPoints = totalPoints;
+        existingSubmission.totalScore = totalPoints;
         existingSubmission.isGraded = true;
         existingSubmission.gradedAt = new Date();
       }
@@ -381,7 +381,7 @@ router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) 
         answers: parsedAnswers,
         files: filesSaved,
         grade,
-        totalPoints,
+        totalScore: totalPoints,
         autoGraded,
         isGraded: autoGraded,
       });
@@ -433,7 +433,7 @@ router.get('/:id/submissions', protect, authorize('teacher','admin'), async (req
 router.put('/:assignmentId/submissions/:submissionId/grade', protect, authorize('teacher','admin'), async (req, res) => {
   try {
     const { assignmentId, submissionId } = req.params;
-    const { grade, feedback, answers: gradedAnswers } = req.body;
+    const { grade, feedback, answers: gradedAnswers, totalScore, gradePercentage } = req.body;
     
     const submission = await Submission.findOne({ _id: submissionId, assignment: assignmentId })
       .populate('assignment');
@@ -444,6 +444,8 @@ router.put('/:assignmentId/submissions/:submissionId/grade', protect, authorize(
     // Update overall grade and feedback
     if (grade !== undefined) submission.grade = Number(grade);
     if (feedback !== undefined) submission.feedback = feedback;
+    if (totalScore !== undefined) submission.totalScore = Number(totalScore);
+    if (gradePercentage !== undefined) submission.gradePercentage = Number(gradePercentage);
     submission.isGraded = true;
     submission.gradedAt = new Date();
     
@@ -475,6 +477,68 @@ router.put('/:assignmentId/submissions/:submissionId/grade', protect, authorize(
   } catch (err) {
     console.error('Grade submission error', err);
     res.status(500).json({ success: false, message: 'Failed to grade submission' });
+  }
+});
+
+// Delete grade (remove grade but keep submission)
+router.delete('/:assignmentId/submissions/:submissionId/grade', protect, authorize('teacher','admin'), async (req, res) => {
+  try {
+    const { assignmentId, submissionId } = req.params;
+    
+    const submission = await Submission.findOne({ _id: submissionId, assignment: assignmentId })
+      .populate('assignment');
+    if (!submission) {
+      return res.status(404).json({ success: false, message: 'Submission not found' });
+    }
+    
+    // Remove grade and related grading info
+    submission.grade = null;
+    submission.totalPoints = submission.assignment?.totalPoints || 100;
+    submission.feedback = null;
+    submission.isGraded = false;
+    submission.gradedAt = null;
+    
+    // Reset individual answer grades for quizzes
+    if (submission.answers && Array.isArray(submission.answers)) {
+      submission.answers = submission.answers.map(answer => ({
+        ...answer.toObject ? answer.toObject() : answer,
+        points: undefined,
+        feedback: undefined,
+        isCorrect: undefined,
+      }));
+    }
+    
+    await submission.save();
+    
+    res.json({ success: true, data: submission, message: 'Grade deleted successfully' });
+  } catch (err) {
+    console.error('Delete grade error', err);
+    res.status(500).json({ success: false, message: 'Failed to delete grade' });
+  }
+});
+
+// Delete submission (entire submission, not just grade)
+router.delete('/:assignmentId/submissions/:submissionId', protect, authorize('teacher','admin'), async (req, res) => {
+  try {
+    const { assignmentId, submissionId } = req.params;
+    
+    // Find submission - don't require assignment to exist (teacher should be able to delete even if assignment is gone)
+    const submission = await Submission.findById(submissionId);
+    if (!submission) {
+      return res.status(404).json({ success: false, message: 'Submission not found' });
+    }
+    
+    // Verify submission belongs to the specified assignment
+    if (submission.assignment.toString() !== assignmentId) {
+      return res.status(403).json({ success: false, message: 'Submission does not belong to this assignment' });
+    }
+    
+    await Submission.findByIdAndDelete(submissionId);
+    
+    res.json({ success: true, message: 'Submission deleted successfully' });
+  } catch (err) {
+    console.error('Delete submission error', err);
+    res.status(500).json({ success: false, message: 'Failed to delete submission' });
   }
 });
 

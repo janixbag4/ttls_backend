@@ -690,6 +690,18 @@ router.post('/:id/view', protect, async (req, res) => {
   }
 });
 
+// Get lesson completion status for current student
+router.get('/:id/completion-status', protect, async (req, res) => {
+  try {
+    const lessonView = await LessonView.findOne({ lesson: req.params.id, student: req.user.id });
+    const completed = lessonView && lessonView.completed ? true : false;
+    res.json({ success: true, data: { completed, completedAt: lessonView?.completedAt } });
+  } catch (err) {
+    console.error('Error fetching completion status:', err);
+    res.status(500).json({ success: false, message: 'Failed to fetch completion status' });
+  }
+});
+
 // Mark lesson as complete (student only)
 router.post('/:id/complete', protect, async (req, res) => {
   try {
@@ -714,6 +726,21 @@ router.post('/:id/complete', protect, async (req, res) => {
     lessonView.completed = true;
     lessonView.completedAt = new Date();
     await lessonView.save();
+    
+    // Also update Progress record to reflect completion
+    let progress = await Progress.findOne({ student: req.user.id, lesson: req.params.id });
+    if (!progress) {
+      progress = new Progress({
+        student: req.user.id,
+        lesson: req.params.id,
+        status: 'completed',
+        updatedAt: new Date()
+      });
+    } else {
+      progress.status = 'completed';
+      progress.updatedAt = new Date();
+    }
+    await progress.save();
     
     res.json({ success: true, message: 'Lesson marked as complete', data: lessonView });
   } catch (err) {
@@ -760,15 +787,15 @@ router.get('/:id/analytics', protect, authorize('teacher', 'admin'), async (req,
     
     // Build student analytics
     const studentAnalytics = allStudents.map(student => {
-      const view = lessonViews.find(v => v.student._id.toString() === student._id.toString());
-      const opened = openedStudents.find(o => o.student._id.toString() === student._id.toString());
-      const studentSubmissions = submissions.filter(s => s.student._id.toString() === student._id.toString());
-      const progress = progressRecords.find(p => p.student._id.toString() === student._id.toString());
+      const view = lessonViews.find(v => v.student && v.student._id.toString() === student._id.toString());
+      const opened = openedStudents.find(o => o.student && o.student._id.toString() === student._id.toString());
+      const studentSubmissions = submissions.filter(s => s.student && s.student._id.toString() === student._id.toString());
+      const progress = progressRecords.find(p => p.student && p.student._id.toString() === student._id.toString());
       
       // Calculate scores from submissions
       const scores = studentSubmissions
-        .filter(s => s.grade !== undefined && s.grade !== null)
-        .map(s => ({ assignment: s.assignment.title, score: s.grade, totalPoints: s.totalPoints || 100 }));
+        .filter(s => s.grade !== undefined && s.grade !== null && s.assignment)
+        .map(s => ({ assignment: s.assignment.title, score: s.grade, totalScore: s.totalScore || 100 }));
       
       return {
         student: {
@@ -790,7 +817,7 @@ router.get('/:id/analytics', protect, authorize('teacher', 'admin'), async (req,
         } : null,
         scores: scores,
         averageScore: scores.length > 0 
-          ? scores.reduce((sum, s) => sum + (s.score / (s.totalPoints || 100) * 100), 0) / scores.length 
+          ? scores.reduce((sum, s) => sum + (s.score / (s.totalScore || 100) * 100), 0) / scores.length 
           : null,
       };
     });
@@ -803,15 +830,15 @@ router.get('/:id/analytics', protect, authorize('teacher', 'admin'), async (req,
           title: lesson.title,
         },
         totalStudents: allStudents.length,
-        studentsViewed: lessonViews.length,
-        studentsOpened: openedStudents.length,
-        studentsSubmitted: new Set(submissions.map(s => s.student._id.toString())).size,
+        completedLessons: progressRecords.filter(p => p.status === 'completed').length,
+        totalViews: lessonViews.reduce((sum, v) => sum + (v.viewCount || 1), 0),
+        studentsCompleted: new Set(progressRecords.filter(p => p.status === 'completed').map(p => p.student._id.toString())).size,
         studentAnalytics: studentAnalytics,
         assignments: assignments.map(a => ({
           _id: a._id,
           title: a.title,
           type: a.type,
-          submissionCount: submissions.filter(s => s.assignment._id.toString() === a._id.toString()).length,
+          submissionCount: submissions.filter(s => s.assignment && s.assignment._id.toString() === a._id.toString()).length,
         })),
       },
     });
