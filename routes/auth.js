@@ -103,7 +103,6 @@ router.post(
   [
     body('idNumber', 'ID Number is required').trim().notEmpty(),
     body('password', 'Password is required').notEmpty(),
-    body('role', 'Role is required').isIn(['student', 'teacher', 'admin']),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -111,11 +110,11 @@ router.post(
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { idNumber, password, role } = req.body;
+    const { idNumber, password } = req.body;
 
     try {
-      // Find user by ID number and role
-      const user = await User.findOne({ idNumber, role });
+      // Find user by ID number only (role will be determined from user document)
+      const user = await User.findOne({ idNumber });
 
       if (!user) {
         return res.status(401).json({
