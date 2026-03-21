@@ -319,8 +319,26 @@ router.get('/', protect, async (req, res) => {
   try {
     const { category, module } = req.query;
     const query = {};
-    if (category) query.category = category;
-    if (module) query.module = module;
+    
+    // If module is specified, STRICTLY filter by it (highest priority)
+    if (module) {
+      // Convert string module ID to ObjectId if needed
+      try {
+        const mongoose = require('mongoose');
+        query.module = new mongoose.Types.ObjectId(module);
+      } catch (e) {
+        // If invalid ObjectId, treat as string comparison
+        query.module = module;
+      }
+    }
+    
+    // Only apply category filter if no module is specified (OR if both are provided)
+    if (category && !module) {
+      query.category = category;
+    } else if (category && module) {
+      // When both are specified, apply category as additional filter
+      query.category = category;
+    }
     
     const lessons = await Lesson.find(query)
       .populate('createdBy', '_id firstName lastName idNumber role profilePicture coverPhoto bio')
