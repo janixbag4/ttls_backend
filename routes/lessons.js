@@ -90,7 +90,7 @@ function chooseDownloadFilename(storedFilename, fallbackTitle, mime) {
 const upload = multer({ storage });
 
 // Helper: upload a buffer to Cloudinary using upload_stream
-function uploadBufferToCloudinary(buffer, originalname) {
+function uploadBufferToCloudinary(buffer, originalname, folderOrMimeType, mimeTypeOverride) {
   return new Promise((resolve, reject) => {
     if (!cloudinary) {
       return reject(new Error('Cloudinary is not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET environment variables.'));
@@ -98,37 +98,76 @@ function uploadBufferToCloudinary(buffer, originalname) {
     if (!buffer || buffer.length === 0) {
       return reject(new Error('File buffer is empty'));
     }
-    const publicId = `${Date.now()}_${originalname.replace(/\.[^/.]+$/, '')}`;
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { 
-        folder: 'ttls_lessons', 
-        public_id: publicId, 
-        resource_type: 'auto',
-        timeout: 60000, // 60 second timeout
-      }, 
-      (error, result) => {
-        if (error) {
-          console.error('Cloudinary upload_stream error:', error);
-          return reject(new Error(`Cloudinary upload failed: ${error.message || String(error)}`));
-        }
-        if (!result || !result.secure_url) {
-          return reject(new Error('Cloudinary upload succeeded but no URL returned'));
-        }
-        resolve(result);
-      }
-    );
     
-    uploadStream.on('error', (err) => {
-      console.error('Cloudinary stream error:', err);
-      reject(new Error(`Cloudinary stream error: ${err.message || String(err)}`));
+    // Handle parameter overloading
+    let folder = 'ttls_lessons';
+    let mimeType = null;
+    
+    if (folderOrMimeType) {
+      if (folderOrMimeType.includes('/') || folderOrMimeType.includes('application') || folderOrMimeType.includes('image') || folderOrMimeType.includes('video')) {
+        mimeType = folderOrMimeType;
+      } else {
+        folder = folderOrMimeType;
+        mimeType = mimeTypeOverride;
+      }
+    }
+    
+    // Determine resource type from MIME type
+    let resourceType = 'auto';
+    if (mimeType) {
+      if (mimeType.startsWith('image/')) {
+        resourceType = 'image';
+      } else if (mimeType.startsWith('video/')) {
+        resourceType = 'video';
+      } else {
+        resourceType = 'raw';
+      }
+    }
+    
+    const publicId = `${Date.now()}_${originalname.replace(/\.[^/.]+$/, '')}`;
+    
+    // Extract file extension and include it in the public_id
+    const fileExtMatch = originalname.match(/\.([^.]+)$/);
+    const fileExt = fileExtMatch ? fileExtMatch[1] : '';
+    const publicIdWithExt = fileExt ? `${publicId}.${fileExt}` : publicId;
+    
+    // Create a data URI for the buffer
+    const base64Data = buffer.toString('base64');
+    const fileUri = `data:${mimeType || 'application/octet-stream'};base64,${base64Data}`;
+    
+    console.log('Starting Cloudinary upload (buffer method):', {
+      originalname,
+      folder: folder,
+      resourceType,
+      size: buffer.length
     });
     
-    try {
-      streamifier.createReadStream(buffer).pipe(uploadStream);
-    } catch (pipeError) {
-      console.error('Error piping to Cloudinary:', pipeError);
-      reject(new Error(`Failed to pipe file to Cloudinary: ${pipeError.message || String(pipeError)}`));
-    }
+    // Use uploader.upload instead of upload_stream for more reliable uploads
+    cloudinary.uploader.upload(fileUri, {
+      folder: folder,
+      public_id: publicIdWithExt,
+      resource_type: resourceType,
+      timeout: 60000
+    }, (error, result) => {
+      if (error) {
+        console.error('Cloudinary upload error:', error);
+        return reject(new Error(`Cloudinary upload failed: ${error.message || String(error)}`));
+      }
+      
+      if (!result || !result.secure_url) {
+        return reject(new Error('Cloudinary upload succeeded but no URL returned'));
+      }
+      
+      console.log('Cloudinary upload successful:', {
+        originalname: originalname,
+        publicId: result.public_id,
+        secureUrl: result.secure_url,
+        resourceType: result.resource_type,
+        type: result.type
+      });
+      
+      resolve(result);
+    });
   });
 }
 
@@ -199,7 +238,7 @@ router.post('/', uploadLimiter, protect, authorize('teacher', 'admin'), async (r
               continue;
             }
             try {
-              const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname);
+              const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, f.mimetype);
               files.push({ url: uploaded.secure_url, public_id: uploaded.public_id, filename: f.originalname, fileType: f.mimetype });
             } catch (uploadErr) {
               console.error('Failed to upload file to Cloudinary', f.originalname, uploadErr);
@@ -223,8 +262,14 @@ router.post('/', uploadLimiter, protect, authorize('teacher', 'admin'), async (r
                   const localFilename = `${Date.now()}_${f.originalname.replace(/\s+/g, '_')}`;
                   const localPath = path.join(uploadDir, localFilename);
                   fs.writeFileSync(localPath, f.buffer);
-                  files.push({ url: localPath, public_id: null, filename: f.originalname, fileType: f.mimetype });
-                  console.log(`File "${f.originalname}" saved to local storage: ${localPath}`);
+                  // Store the relative path from backend root, prefixed with /uploads/
+                  const storagePath = `/uploads/${localFilename}`;
+                  files.push({ url: storagePath, public_id: null, filename: f.originalname, fileType: f.mimetype });
+                  console.log(`File "${f.originalname}" saved to local storage:`, {
+                    absolutePath: localPath,
+                    storagePath: storagePath,
+                    exists: fs.existsSync(localPath)
+                  });
                 } catch (localErr) {
                   console.error('Failed to save file to local storage', localErr);
                   return res.status(500).json({ 
@@ -342,7 +387,7 @@ router.get('/', protect, async (req, res) => {
     
     const lessons = await Lesson.find(query)
       .populate('createdBy', '_id firstName lastName idNumber role profilePicture coverPhoto bio')
-      .populate('module', 'title moduleNumber');
+      .populate('module', '_id title moduleNumber category');
     res.json({ success: true, data: lessons });
   } catch (error) {
     console.error(error);
@@ -366,7 +411,7 @@ router.get('/:id', protect, async (req, res) => {
   try {
     const lesson = await Lesson.findById(req.params.id)
       .populate('createdBy', '_id firstName lastName idNumber role profilePicture coverPhoto bio')
-      .populate('module', 'title moduleNumber category');
+      .populate('module', '_id title moduleNumber category');
     if (!lesson) return res.status(404).json({ success: false, message: 'Lesson not found' });
     res.json({ success: true, data: lesson });
   } catch (error) {
@@ -556,7 +601,7 @@ router.put('/:id', protect, authorize('teacher','admin'), async (req, res) => {
               continue;
             }
             try {
-              const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname);
+              const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, f.mimetype);
               newFiles.push({ url: uploaded.secure_url, public_id: uploaded.public_id, filename: f.originalname, fileType: f.mimetype });
             } catch (uploadErr) {
               console.error('Failed to upload file to Cloudinary', f.originalname, uploadErr);
@@ -577,8 +622,14 @@ router.put('/:id', protect, authorize('teacher','admin'), async (req, res) => {
                   const localFilename = `${Date.now()}_${f.originalname.replace(/\s+/g, '_')}`;
                   const localPath = path.join(uploadDir, localFilename);
                   fs.writeFileSync(localPath, f.buffer);
-                  newFiles.push({ url: localPath, public_id: null, filename: f.originalname, fileType: f.mimetype });
-                  console.log(`File "${f.originalname}" saved to local storage: ${localPath}`);
+                  // Store the relative path from backend root, prefixed with /uploads/
+                  const storagePath = `/uploads/${localFilename}`;
+                  newFiles.push({ url: storagePath, public_id: null, filename: f.originalname, fileType: f.mimetype });
+                  console.log(`File "${f.originalname}" saved to local storage:`, {
+                    absolutePath: localPath,
+                    storagePath: storagePath,
+                    exists: fs.existsSync(localPath)
+                  });
                 } catch (localErr) {
                   console.error('Failed to save file to local storage', localErr);
                   return res.status(500).json({ 
@@ -606,7 +657,29 @@ router.put('/:id', protect, authorize('teacher','admin'), async (req, res) => {
             newFiles.push({ url: filePath, public_id: null, filename: f.originalname, fileType: f.mimetype });
           }
         }
-        lesson.files.push(...newFiles);
+        if (newFiles.length > 0) {
+          // Explicitly create ObjectIds for each file to ensure they persist
+          // This prevents Mongoose from having issues with subdocument ID generation
+          const mongoose = require('mongoose');
+          const filesWithIds = newFiles.map(fileData => ({
+            ...fileData,
+            _id: fileData._id || new mongoose.Types.ObjectId()
+          }));
+          
+          lesson.files = [...lesson.files, ...filesWithIds];
+          lesson.markModified('files');
+          
+          console.log('Files added to lesson (before save):', {
+            lessonId: lesson._id,
+            fileCount: filesWithIds.length,
+            totalFiles: lesson.files.length,
+            files: filesWithIds.map(f => ({ 
+              _id: f._id.toString(),
+              filename: f.filename, 
+              fileType: f.fileType 
+            }))
+          });
+        }
       }
 
       if (links !== null) {
@@ -650,10 +723,49 @@ router.put('/:id', protect, authorize('teacher','admin'), async (req, res) => {
         lesson.coverPhoto = coverPhotoUrl;
       }
 
-      await lesson.save();
+      // Log BEFORE save
+      console.log('Before save - lesson files:', {
+        lessonId: lesson._id,
+        fileCount: lesson.files.length,
+        files: lesson.files.map(f => ({ 
+          _id: f._id ? f._id.toString() : 'PENDING_ID',
+          filename: f.filename,
+          hasId: !!f._id,
+          url:f.url ? f.url.substring(0, 60) + '...' : 'NO_URL'
+        }))
+      });
+
+      const saveResult = await lesson.save();
+      
+      // Log AFTER save - immediately from memory
+      console.log('After save - lesson in memory:', {
+        lessonId: lesson._id,
+        fileCount: lesson.files.length,
+        files: lesson.files.map(f => ({ 
+          _id: f._id ? f._id.toString() : 'NO_ID_AFTER_SAVE',
+          filename: f.filename,
+          hasId: !!f._id
+        })),
+        saveResultFileCount: saveResult.files ? saveResult.files.length : 'NO_FILES_IN_RESULT'
+      });
+      
+      // Re-fetch to ensure all file IDs are properly generated and populated
+      console.log('About to refetch lesson from DB with ID:', lesson._id.toString());
       const updatedLesson = await Lesson.findById(lesson._id)
         .populate('createdBy', '_id firstName lastName idNumber role profilePicture coverPhoto bio')
-        .populate('module', 'title moduleNumber category');
+        .populate('module', '_id title moduleNumber category');
+      
+      // Log the files with their IDs for debugging
+      console.log('After refetch from DB:', {
+        lessonId: updatedLesson._id,
+        fileCount: updatedLesson.files.length,
+        files: updatedLesson.files.map(f => ({ 
+          _id: f._id ? f._id.toString() : 'NO_ID',
+          filename: f.filename, 
+          fileType: f.fileType 
+        }))
+      });
+      
       res.json({ success: true, data: updatedLesson });
     } catch (err) {
       console.error('Update lesson error:', err);
@@ -872,50 +984,61 @@ router.get('/:lessonId/files/:fileId/download', protect, async (req, res) => {
   try {
     const { lessonId, fileId } = req.params;
     
+    console.log('Download file request:', { lessonId, fileId });
+    
     const lesson = await Lesson.findById(lessonId);
     if (!lesson) {
+      console.log('Lesson not found:', lessonId);
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
+
+    console.log('Lesson files:', {
+      lessonId,
+      fileCount: lesson.files.length,
+      fileIds: lesson.files.map(f => ({
+        _id: f._id ? f._id.toString() : 'NO_ID',
+        filename: f.filename
+      }))
+    });
 
     // Try to find file
     let file = null;
     try {
+      // First try Mongoose subdocument ID method
       file = lesson.files.id(fileId);
     } catch (e) {
+      // Fallback to manual search
       file = lesson.files.find(f => {
         const fId = f._id ? f._id.toString() : (f.id ? f.id.toString() : null);
         return fId === fileId;
       });
     }
     
-    if (!file || !file.url) {
+    if (!file) {
+      console.error('File not found in lesson files:', {
+        lessonId,
+        requestedFileId: fileId,
+        availableFileIds: lesson.files.map(f => f._id ? f._id.toString() : 'NO_ID')
+      });
       return res.status(404).json({ success: false, message: 'File not found' });
+    }
+
+    if (!file.url) {
+      console.error('File exists but has no URL:', {
+        lessonId,
+        fileId,
+        file: { filename: file.filename, fileType: file.fileType }
+      });
+      return res.status(404).json({ success: false, message: 'File URL not found' });
     }
 
     let downloadUrl = file.url;
     
-    // For Cloudinary PDFs, fix the resource type
-    if (downloadUrl.includes('cloudinary.com')) {
-      const isPDF = file.fileType === 'application/pdf' || 
-                   (file.filename && file.filename.toLowerCase().endsWith('.pdf'));
-      
-      if (isPDF && downloadUrl.includes('/image/upload/')) {
-        // Convert to raw resource type for PDFs
-        downloadUrl = downloadUrl.replace('/image/upload/', '/raw/upload/');
-      }
-      
-      // If we have public_id and Cloudinary SDK, generate correct URL
-      if (file.public_id && cloudinary && isPDF) {
-        try {
-          downloadUrl = cloudinary.url(file.public_id, {
-            resource_type: 'raw',
-            secure: true
-          });
-        } catch (e) {
-          // Fall back to modified URL
-        }
-      }
-    }
+    console.log('Using download URL:', {
+      original: file.url,
+      filename: file.filename,
+      hasPublicId: !!file.public_id
+    });
 
     // For remote URLs (Cloudinary), stream the file and set headers so filename and extension are preserved
     if (downloadUrl && /^https?:\/\//i.test(downloadUrl)) {
@@ -939,10 +1062,29 @@ router.get('/:lessonId/files/:fileId/download', protect, async (req, res) => {
       }
     } else {
       // For local files, serve them directly
-      const localPath = path.isAbsolute(downloadUrl) ? downloadUrl : path.join(__dirname, '..', downloadUrl);
+      let localPath = downloadUrl;
+      
+      // If it's a relative path starting with /, convert to filesystem path
+      if (downloadUrl.startsWith('/')) {
+        localPath = path.join(__dirname, '..', downloadUrl);
+      } else if (!path.isAbsolute(downloadUrl)) {
+        localPath = path.join(__dirname, '..', downloadUrl);
+      }
+      
+      console.log('Serving local file:', {
+        originalUrl: downloadUrl,
+        resolvedPath: localPath,
+        exists: fs.existsSync(localPath)
+      });
+      
       if (!fs.existsSync(localPath)) {
+        console.error('Local file not found:', {
+          requestedUrl: downloadUrl,
+          resolvedPath: localPath
+        });
         return res.status(404).json({ success: false, message: 'File not found on server' });
       }
+      
       const filename = file.filename || 'file';
       res.setHeader('Content-Type', file.fileType || 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);

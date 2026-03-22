@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const streamifier = require('streamifier');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const { cloudinary, hasCloudinary } = require('../config/cloudinary');
 const { protect, authorize } = require('../middleware/auth');
 const Assignment = require('../models/Assignment');
@@ -9,12 +12,91 @@ const Submission = require('../models/Submission');
 // memory storage for attachments (we upload buffers to Cloudinary when available)
 const upload = multer({ storage: multer.memoryStorage() });
 
-// helper: upload buffer to Cloudinary using upload_stream
-function uploadBufferToCloudinary(buffer, originalname, folder = 'ttls_assignments') {
+// common mime -> extension mapping
+const mimeExt = {
+  'application/pdf': '.pdf',
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'application/zip': '.zip',
+  'text/plain': '.txt',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx'
+};
+
+function extractFilenameFromContentDisposition(header) {
+  if (!header) return null;
+  const match = header.match(/filename\*=UTF-8''(.+?)(?:;|$)/i) || header.match(/filename=["']?([^"';]+)["']?/i);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function ensureFilenameHasExtension(filename, mime) {
+  if (!filename) return filename;
+  if (filename.indexOf('.') !== -1) return filename;
+  const ext = mimeExt[mime] || '';
+  if (ext) return filename + ext;
+  return filename;
+}
+
+function sanitizeName(name) {
+  if (!name) return name;
+  let s = name.replace(/^"|"$/g, '');
+  s = s.replace(/[\\/\s]+/g, '_');
+  s = s.replace(/[^A-Za-z0-9_\-\.\(\)\[\]]+/g, '');
+  if (s.length > 120) s = s.slice(0, 120);
+  return s;
+}
+
+function looksLikeGeneratedId(name) {
+  if (!name) return true;
+  const base = name.replace(/\.[^.]+$/, '');
+  return /^\d+(_[A-Z0-9]+)?$/.test(base);
+}
+
+function chooseDownloadFilename(storedFilename, fallbackTitle, mime) {
+  if (storedFilename && storedFilename.indexOf('.') !== -1 && !looksLikeGeneratedId(storedFilename)) {
+    return sanitizeName(storedFilename);
+  }
+  if (storedFilename && !looksLikeGeneratedId(storedFilename)) {
+    return sanitizeName(ensureFilenameHasExtension(storedFilename, mime));
+  }
+  const base = fallbackTitle ? fallbackTitle.replace(/[^A-Za-z0-9\s]/g, '').trim().slice(0, 80).replace(/\s+/g, '_') : 'download';
+  const ext = mimeExt[mime] || '';
+  return sanitizeName(base) + ext;
+}
+
+// helper: upload buffer to Cloudinary using upload_stream with proper MIME type detection
+function uploadBufferToCloudinary(buffer, originalname, folderOrMimeType, mimeTypeOverride) {
   return new Promise((resolve, reject) => {
     if (!cloudinary) return reject(new Error('Cloudinary is not configured'));
+    
+    // Handle parameter overloading
+    let folder = 'ttls_assignments';
+    let mimeType = null;
+    
+    if (folderOrMimeType) {
+      if (folderOrMimeType.includes('/') || folderOrMimeType.includes('application') || folderOrMimeType.includes('image') || folderOrMimeType.includes('video')) {
+        mimeType = folderOrMimeType;
+      } else {
+        folder = folderOrMimeType;
+        mimeType = mimeTypeOverride;
+      }
+    }
+    
+    // Determine resource type from MIME type
+    let resourceType = 'auto';
+    if (mimeType) {
+      if (mimeType.startsWith('image/')) {
+        resourceType = 'image';
+      } else if (mimeType.startsWith('video/')) {
+        resourceType = 'video';
+      } else {
+        resourceType = 'raw';
+      }
+    }
+    
     const publicId = `${Date.now()}_${originalname.replace(/\.[^/.]+$/, '')}`;
-    const stream = cloudinary.uploader.upload_stream({ folder, public_id: publicId, resource_type: 'auto' }, (err, result) => {
+    const stream = cloudinary.uploader.upload_stream({ folder, public_id: publicId, resource_type: resourceType }, (err, result) => {
       if (err) return reject(err);
       resolve(result);
     });
@@ -76,8 +158,15 @@ function uploadBufferToCloudinary(buffer, originalname, folder = 'ttls_assignmen
         for (const f of req.files) {
           try {
             if (!f.buffer) continue;
-            const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname);
-            saved.push({ url: uploaded.secure_url, public_id: uploaded.public_id, filename: f.originalname, fileType: f.mimetype });
+            const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, f.mimetype);
+            const fileRecord = { 
+              url: uploaded.secure_url, 
+              public_id: uploaded.public_id, 
+              filename: f.originalname,  // Always use original filename with extension
+              fileType: f.mimetype 
+            };
+            saved.push(fileRecord);
+            console.log('Saved attachment:', { filename: fileRecord.filename, fileType: fileRecord.fileType });
           } catch (err) {
             console.error('Failed to upload attachment to Cloudinary', f.originalname, err);
             return res.status(500).json({ success: false, message: 'Failed to upload attachments' });
@@ -123,7 +212,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Update assignment (public for testing)
-router.put('/:id', upload.array('attachments', 10), async (req, res) => {
+router.put('/:id', protect, upload.array('attachments', 10), async (req, res) => {
   try {
     const assignment = await Assignment.findById(req.params.id);
     if (!assignment) return res.status(404).json({ success: false, message: 'Assignment not found' });
@@ -175,8 +264,15 @@ router.put('/:id', upload.array('attachments', 10), async (req, res) => {
         for (const f of req.files) {
           try {
             if (!f.buffer) continue;
-            const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname);
-            saved.push({ url: uploaded.secure_url, public_id: uploaded.public_id, filename: f.originalname, fileType: f.mimetype });
+            const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, f.mimetype);
+            const fileRecord = { 
+              url: uploaded.secure_url, 
+              public_id: uploaded.public_id, 
+              filename: f.originalname,  // Always use original filename with extension
+              fileType: f.mimetype 
+            };
+            saved.push(fileRecord);
+            console.log('Updated attachment:', { filename: fileRecord.filename, fileType: fileRecord.fileType });
           } catch (err) {
             console.error('Failed to upload attachment to Cloudinary', f.originalname, err);
             return res.status(500).json({ success: false, message: 'Failed to upload attachments' });
@@ -292,7 +388,7 @@ router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) 
         for (const f of req.files) {
           try {
             if (!f.buffer) continue;
-            const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, 'ttls_submissions');
+            const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, 'ttls_submissions', f.mimetype);
             filesSaved.push({ url: uploaded.secure_url, public_id: uploaded.public_id, filename: f.originalname, fileType: f.mimetype });
           } catch (err) {
             console.error('Failed to upload submission file to Cloudinary', f.originalname, err);
@@ -313,7 +409,7 @@ router.post('/:id/submit', protect, upload.array('files', 10), async (req, res) 
           if (hasCloudinary) {
             try {
               if (f.buffer) {
-                const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, 'ttls_submissions');
+                const uploaded = await uploadBufferToCloudinary(f.buffer, f.originalname, 'ttls_submissions', f.mimetype);
                 if (!answer.files) answer.files = [];
                 answer.files.push({ url: uploaded.secure_url, public_id: uploaded.public_id, filename: f.originalname, fileType: f.mimetype });
               }
@@ -625,6 +721,81 @@ router.delete('/:id', protect, async (req, res) => {
   } catch (err) {
     console.error('Delete assignment error:', err);
     res.status(500).json({ success: false, message: 'Failed to delete assignment' });
+  }
+});
+
+// Download an assignment attachment
+router.get('/:assignmentId/attachments/:attachmentIndex/download', protect, async (req, res) => {
+  try {
+    const { assignmentId, attachmentIndex } = req.params;
+    const assignment = await Assignment.findById(assignmentId);
+    
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: 'Assignment not found' });
+    }
+    
+    const attachmentIdx = parseInt(attachmentIndex, 10);
+    if (isNaN(attachmentIdx) || attachmentIdx < 0 || attachmentIdx >= (assignment.attachments?.length || 0)) {
+      return res.status(404).json({ success: false, message: 'Attachment not found' });
+    }
+    
+    const file = assignment.attachments[attachmentIdx];
+    if (!file || !file.url) {
+      return res.status(404).json({ success: false, message: 'File URL not found' });
+    }
+    
+    console.log('Download attachment:', {
+      filename: file.filename,
+      fileType: file.fileType,
+      url: file.url
+    });
+    
+    let downloadUrl = file.url;
+    
+    // For remote URLs (Cloudinary), stream the file and set headers so filename and extension are preserved
+    if (downloadUrl && /^https?:\/\//i.test(downloadUrl)) {
+      try {
+        const responseStream = await axios.get(downloadUrl, { responseType: 'stream' });
+        const headers = responseStream.headers || responseStream.data?.headers || {};
+        const sourceContentType = headers['content-type'] || headers['Content-Type'];
+        const sourceDisposition = headers['content-disposition'] || headers['Content-Disposition'];
+        let mime = file.fileType || sourceContentType || 'application/octet-stream';
+        let filename = file.filename || 'file';
+        const extracted = extractFilenameFromContentDisposition(sourceDisposition);
+        if (extracted) filename = extracted;
+        filename = chooseDownloadFilename(filename, assignment.title || 'file', mime);
+        
+        console.log('Download response headers:', {
+          sourceContentType,
+          storedFileType: file.fileType,
+          finalMime: mime,
+          finalFilename: filename,
+          allHeaders: Object.keys(headers).slice(0, 10)
+        });
+        
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        responseStream.data.pipe(res);
+      } catch (err) {
+        console.warn('Failed to stream remote file, falling back to redirect:', err && err.message ? err.message : err);
+        // Fallback to redirect (previous behavior) if streaming fails
+        res.redirect(302, downloadUrl);
+      }
+    } else {
+      // For local files, serve them directly
+      const localPath = path.isAbsolute(downloadUrl) ? downloadUrl : path.join(__dirname, '..', downloadUrl);
+      if (!fs.existsSync(localPath)) {
+        return res.status(404).json({ success: false, message: 'File not found on server' });
+      }
+      const mime = file.fileType || 'application/octet-stream';
+      const filename = file.filename || 'file';
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      fs.createReadStream(localPath).pipe(res);
+    }
+  } catch (err) {
+    console.error('Download attachment error:', err);
+    res.status(500).json({ success: false, message: 'Failed to download file' });
   }
 });
 
