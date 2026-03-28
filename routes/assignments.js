@@ -192,7 +192,17 @@ router.get('/', async (req, res) => {
   try {
     const filter = {};
     if (req.query.lessonId) filter.lesson = req.query.lessonId;
-    const items = await Assignment.find(filter).populate('createdBy', 'firstName lastName email profilePicture').sort({ createdAt: -1 });
+    const items = await Assignment.find(filter)
+      .populate('createdBy', 'firstName lastName email profilePicture')
+      .populate({
+        path: 'lesson',
+        select: '_id title module',
+        populate: {
+          path: 'module',
+          select: '_id title moduleNumber'
+        }
+      })
+      .sort({ createdAt: -1 });
     res.json({ success: true, data: items });
   } catch (err) {
     console.error('List assignments', err);
